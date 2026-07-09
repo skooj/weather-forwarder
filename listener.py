@@ -4,7 +4,7 @@ Weather Station Forwarder — Local Push Listener
 
 Receives Wunderground-protocol pushes from an Ambient Weather console's
 "Customized" server slot (local network, no cloud round-trip) and forwards
-to CWOP, PWSWeather, and OpenWeatherMap.
+to Wunderground, CWOP, PWSWeather, OpenWeatherMap, Windy, and WeatherCloud.
 """
 
 import json
@@ -12,6 +12,7 @@ import logging
 import os
 import sys
 import time
+import threading
 import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
@@ -76,10 +77,9 @@ WEATHERCLOUD_KEY = env("WEATHERCLOUD_KEY")
 HEALTHCHECKS_URL = env("HEALTHCHECKS_URL")
 
 # ---------------------------------------------------------------------------
-# State (persistent JSON) — thread-safe-ish since ThreadingHTTPServer
+# State (persistent JSON) — protected by STATE_LOCK
 # ---------------------------------------------------------------------------
 
-import threading
 STATE_LOCK = threading.Lock()
 
 def load_state() -> dict:
@@ -123,7 +123,7 @@ def inh_to_hpa(inh): return inh * 33.86389
 def in_to_mm(inches): return inches * 25.4
 
 # ---------------------------------------------------------------------------
-# HTTP helpers (outbound, to CWOP/PWSWeather/OWM)
+# HTTP helpers (outbound)
 # ---------------------------------------------------------------------------
 
 TIMEOUT = 15
@@ -200,11 +200,6 @@ def update_precip_history(state: dict, rate_in: float) -> float | None:
 # ---------------------------------------------------------------------------
 
 def parse_console_push(query: dict) -> dict:
-    """
-    The console sends standard Wunderground PWS protocol query params:
-    tempf, dewptf, windspeedmph, windgustmph, winddir, baromin, humidity,
-    UV, solarradiation, rainin, dailyrainin, dateutc, etc.
-    """
     def f(key):
         v = query.get(key, [None])[0]
         return float(v) if v not in (None, "") else None
@@ -214,7 +209,7 @@ def parse_console_push(query: dict) -> dict:
         return int(float(v)) if v not in (None, "") else None
 
     c = {}
-    c["obs_time_ms"] = int(time.time() * 1000)  # console doesn't reliably send usable dateutc locally; stamp on receipt
+    c["obs_time_ms"] = int(time.time() * 1000)
     c["lat"] = LAT
     c["lon"] = LON
 
@@ -276,9 +271,6 @@ def parse_console_push(query: dict) -> dict:
 # ---------------------------------------------------------------------------
 
 def send_wunderground(c: dict, state: dict) -> bool:
-    station_id = WU_STATION_ID
-    station_key = WU_STATION_KEY
-
     dt = datetime.fromtimestamp(c["obs_time_ms"] / 1000, tz=timezone.utc)
     dateutc = dt.strftime("%Y-%m-%d %H:%M:%S")
 
@@ -307,8 +299,8 @@ def send_wunderground(c: dict, state: dict) -> bool:
         optional["dailyrainin"] = c["precip_since_midnight_in"]
 
     params = {
-        "ID": station_id,
-        "PASSWORD": station_key,
+        "ID": WU_STATION_ID,
+        "PASSWORD": WU_STATION_KEY,
         "dateutc": dateutc,
         "softwaretype": "python-listener-v1",
         "action": "updateraw",
@@ -325,16 +317,13 @@ def send_wunderground(c: dict, state: dict) -> bool:
     return True
 
 def send_cwop(c: dict, state: dict) -> bool:
-    station_id = CWOP_STATION_ID
-    validation = CWOP_VALIDATION_CODE or None
-
     for field in ("temp_f", "wind_mph", "gust_mph", "winddir"):
         if field not in c:
             log.warning("CWOP: missing required field %s, skipping this push", field)
             return False
 
     params = {
-        "id": station_id,
+        "id": CWOP_STATION_ID,
         "lat": c["lat"],
         "long": c["lon"],
         "time": c["obs_time_ms"],
@@ -344,8 +333,8 @@ def send_cwop(c: dict, state: dict) -> bool:
         "winddir": c["winddir"],
         "software": "python-listener-v1",
     }
-    if validation:
-        params["validation"] = validation
+    if CWOP_VALIDATION_CODE:
+        params["validation"] = CWOP_VALIDATION_CODE
     if "pressure_hpa" in c:
         params["pressure"] = c["pressure_hpa"]
     if "humidity" in c:
@@ -365,9 +354,6 @@ def send_cwop(c: dict, state: dict) -> bool:
     return True
 
 def send_pwsweather(c: dict, state: dict) -> bool:
-    station_id = PWS_STATION_ID
-    api_key = PWS_API_KEY
-
     dt = datetime.fromtimestamp(c["obs_time_ms"] / 1000, tz=timezone.utc)
     dateutc = dt.strftime("%Y-%m-%d+%H:%M:%S")
 
@@ -397,7 +383,7 @@ def send_pwsweather(c: dict, state: dict) -> bool:
 
     url = (
         f"https://pwsupdate.pwsweather.com/api/v1/submitwx"
-        f"?ID={station_id}&PASSWORD={api_key}&dateutc={dateutc}"
+        f"?ID={PWS_STATION_ID}&PASSWORD={PWS_API_KEY}&dateutc={dateutc}"
         f"&softwaretype=python-listener-v1&action=updateraw"
         f"&{urllib.parse.urlencode(optional)}"
     )
@@ -408,15 +394,12 @@ def send_pwsweather(c: dict, state: dict) -> bool:
     return True
 
 def send_openweathermap(c: dict, state: dict) -> bool:
-    api_key = OWM_API_KEY
-    external_id = OWM_STATION_ID
-
     if "owm_internal_id" not in state:
-        stations_url = f"https://api.openweathermap.org/data/3.0/stations?APPID={api_key}"
+        stations_url = f"https://api.openweathermap.org/data/3.0/stations?APPID={OWM_API_KEY}"
         stations = http_get_json(stations_url)
-        match = next((s for s in stations if str(s.get("external_id")) == str(external_id)), None)
+        match = next((s for s in stations if str(s.get("external_id")) == str(OWM_STATION_ID)), None)
         if not match:
-            log.error("OWM: station with external_id %s not found", external_id)
+            log.error("OWM: station with external_id %s not found", OWM_STATION_ID)
             return False
         state["owm_internal_id"] = match["id"]
         log.info("OWM: resolved internal station ID: %s", state["owm_internal_id"])
@@ -441,7 +424,7 @@ def send_openweathermap(c: dict, state: dict) -> bool:
         measurement["rain_1h"] = c["precip_last_hour_mm"]
 
     payload = json.dumps([measurement]).encode()
-    url = f"https://api.openweathermap.org/data/3.0/measurements?APPID={api_key}"
+    url = f"https://api.openweathermap.org/data/3.0/measurements?APPID={OWM_API_KEY}"
     status, body = http_post(url, payload, {"Content-Type": "application/json"})
     log.info("OWM response: %s %s", status, body.strip() or "(empty)")
 
@@ -474,17 +457,25 @@ def send_windy(c: dict, state: dict) -> bool:
         params["solarradiation"] = c["solar_radiation"]
     if "precip_since_midnight_mm" in c:
         params["precip"] = c["precip_since_midnight_mm"]
- 
+
     url = "https://stations.windy.com/api/v2/observation/update?" + urllib.parse.urlencode(params)
     response = http_get(url)
     log.info("Windy response: %s", response.strip())
- 
+
     state["last_windy_ts"] = int(time.time() * 1000)
     return True
 
-def send_weathercloud(c: dict, state: dict) -> bool:
+def send_weathercloud(c: dict) -> bool:
+    """
+    WeatherCloud's backend has proven unreliable -- observed slow/hanging
+    connections up to ~1 minute for a single request, and intermittent
+    502s. This function is always invoked in a background thread (see
+    weathercloud_background/handle_push) with a generous 2-minute timeout,
+    so a slow or hung request here never blocks the state lock or delays
+    any other sender.
+    """
     dt = datetime.fromtimestamp(c["obs_time_ms"] / 1000, tz=timezone.utc)
- 
+
     params = {
         "wid": WEATHERCLOUD_ID,
         "key": WEATHERCLOUD_KEY,
@@ -515,17 +506,38 @@ def send_weathercloud(c: dict, state: dict) -> bool:
         params["rainrate"] = round(c["precip_rate_mm"] * 10)
     if "precip_since_midnight_mm" in c:
         params["rain"] = round(c["precip_since_midnight_mm"] * 10)
- 
+
     url = "https://api.weathercloud.net/v01/set?" + urllib.parse.urlencode(params)
-    response = http_get(url)
-    result = response.strip()
+
+    req = urllib.request.Request(url, headers=OUTBOUND_HEADERS)
+    try:
+        with urllib.request.urlopen(req, timeout=120) as r:
+            result = r.read().decode().strip()
+    except Exception as e:
+        log.warning("WeatherCloud unreachable (non-fatal, skipping): %s", e)
+        return False
+
     log.info("WeatherCloud response: %s", result)
- 
     if result != "200":
-        raise RuntimeError(f"WeatherCloud rejected the update: {result}")
- 
-    state["last_weathercloud_ts"] = int(time.time() * 1000)
+        log.warning("WeatherCloud rejected the update (non-fatal): %s", result)
+        return False
+
     return True
+
+def weathercloud_background(c: dict) -> None:
+    """Runs send_weathercloud on its own thread so its up-to-2-minute
+    timeout never blocks STATE_LOCK or delays other senders. Only briefly
+    reacquires the lock afterward to record the timestamp on success."""
+    try:
+        ok = send_weathercloud(c)
+    except Exception as e:
+        log.warning("WeatherCloud send failed (non-fatal): %s", e)
+        return
+    if ok:
+        with STATE_LOCK:
+            state = load_state()
+            state["last_weathercloud_ts"] = int(time.time() * 1000)
+            save_state(state)
 
 # ---------------------------------------------------------------------------
 # Healthchecks.io ping
@@ -542,7 +554,7 @@ def ping_healthcheck(success: bool) -> None:
         log.warning("Healthcheck ping failed: %s", e)
 
 # ---------------------------------------------------------------------------
-# Rate gate
+# Rate gates
 # ---------------------------------------------------------------------------
 
 def elapsed_ms(ts_ms: int) -> int:
@@ -551,7 +563,7 @@ def elapsed_ms(ts_ms: int) -> int:
 CWOP_INTERVAL_MS = 5 * 60 * 1000
 PWS_INTERVAL_MS  = 5 * 60 * 1000
 OWM_INTERVAL_MS  = 1 * 60 * 1000
-WINDY_INTERVAL_MS       = 5 * 60 * 1000
+WINDY_INTERVAL_MS = 5 * 60 * 1000
 WEATHERCLOUD_INTERVAL_MS = 10 * 60 * 1000
 
 # ---------------------------------------------------------------------------
@@ -616,13 +628,16 @@ def handle_push(query: dict) -> None:
                     log.error("Windy send failed: %s", e)
                     success = False
 
+        # WeatherCloud dispatches on its own thread -- never blocks this
+        # lock and never affects `success`/healthchecks, since its backend
+        # has proven unreliable and isn't critical to the pipeline.
         if WEATHERCLOUD_ID and WEATHERCLOUD_KEY:
             if elapsed_ms(state["last_weathercloud_ts"]) >= WEATHERCLOUD_INTERVAL_MS:
-                try:
-                    send_weathercloud(conditions, state)
-                except Exception as e:
-                    log.error("WeatherCloud send failed: %s", e)
-                    success = False
+                threading.Thread(
+                    target=weathercloud_background,
+                    args=(conditions,),
+                    daemon=True,
+                ).start()
 
         save_state(state)
         ping_healthcheck(success)
@@ -636,13 +651,11 @@ class PushHandler(BaseHTTPRequestHandler):
         pass  # suppress default noisy access logging
 
     def do_GET(self):
-        # Log exactly what the console sent
         log.info("Raw request: %s", self.path)
 
         parsed = urllib.parse.urlparse(self.path)
         query = urllib.parse.parse_qs(parsed.query)
 
-        # Log the parsed query parameters
         log.info("Parsed query: %s", query)
 
         # Respond immediately so the console doesn't retry
@@ -653,7 +666,7 @@ class PushHandler(BaseHTTPRequestHandler):
 
         try:
             handle_push(query)
-        except Exception as e:
+        except Exception:
             log.exception("Error handling push")
 
 def main():
