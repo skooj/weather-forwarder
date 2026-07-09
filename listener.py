@@ -449,38 +449,36 @@ def send_openweathermap(c: dict, state: dict) -> bool:
     return True
 
 def send_windy(c: dict, state: dict) -> bool:
-    dt = datetime.fromtimestamp(c["obs_time_ms"] / 1000, tz=timezone.utc)
-    iso_time = dt.strftime("%Y-%m-%dT%H:%M:%S.000Z")
-
     params = {
+        "id": WINDY_STATION_ID,
         "PASSWORD": WINDY_STATION_PASSWORD,
-        "stationId": WINDY_STATION_ID,
-        "softwaretype": "python-listener-v1",
-        "time": iso_time,
+        "ts": int(c["obs_time_ms"] / 1000),
     }
-    if "temp_f" in c:
-        params["tempf"] = c["temp_f"]
-    if "dewpt_f" in c:
-        params["dewptf"] = c["dewpt_f"]
-    if "wind_mph" in c:
-        params["windspeedmph"] = c["wind_mph"]
-    if "gust_mph" in c:
-        params["windgustmph"] = c["gust_mph"]
+    if "temp_c" in c:
+        params["temp"] = c["temp_c"]
+    if "dewpt_c" in c:
+        params["dewpoint"] = c["dewpt_c"]
+    if "wind_mps" in c:
+        params["wind"] = c["wind_mps"]
+    if "gust_mps" in c:
+        params["gust"] = c["gust_mps"]
     if "winddir" in c:
         params["winddir"] = c["winddir"]
-    if "pressure_inhg" in c:
-        params["baromin"] = c["pressure_inhg"]
     if "humidity" in c:
         params["humidity"] = c["humidity"]
-    if "precip_last_hour_in" in c:
-        params["rainin"] = c["precip_last_hour_in"]
+    if "pressure_hpa" in c:
+        params["pressure"] = round(c["pressure_hpa"] * 100)  # hPa -> Pa
     if "uv" in c:
         params["uv"] = c["uv"]
-
+    if "solar_radiation" in c:
+        params["solarradiation"] = c["solar_radiation"]
+    if "precip_since_midnight_mm" in c:
+        params["precip"] = c["precip_since_midnight_mm"]
+ 
     url = "https://stations.windy.com/api/v2/observation/update?" + urllib.parse.urlencode(params)
     response = http_get(url)
     log.info("Windy response: %s", response.strip())
-
+ 
     state["last_windy_ts"] = int(time.time() * 1000)
     return True
 
