@@ -481,7 +481,7 @@ def send_weathercloud(c: dict) -> bool:
         "key": WEATHERCLOUD_KEY,
         "date": dt.strftime("%Y%m%d"),
         "time": dt.strftime("%H%M"),
-        "software": "python-listener-v1",
+        "software": "appsscriptforwarderv2.13.0",
     }
     # WeatherCloud expects most values as integers scaled by 10
     if "temp_c" in c:
