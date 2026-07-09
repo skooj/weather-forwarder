@@ -484,7 +484,7 @@ def send_windy(c: dict, state: dict) -> bool:
 
 def send_weathercloud(c: dict, state: dict) -> bool:
     dt = datetime.fromtimestamp(c["obs_time_ms"] / 1000, tz=timezone.utc)
-
+ 
     params = {
         "wid": WEATHERCLOUD_ID,
         "key": WEATHERCLOUD_KEY,
@@ -515,11 +515,15 @@ def send_weathercloud(c: dict, state: dict) -> bool:
         params["rainrate"] = round(c["precip_rate_mm"] * 10)
     if "precip_since_midnight_mm" in c:
         params["rain"] = round(c["precip_since_midnight_mm"] * 10)
-
-    url = "http://api.weathercloud.net/v01/set?" + urllib.parse.urlencode(params)
+ 
+    url = "https://api.weathercloud.net/v01/set?" + urllib.parse.urlencode(params)
     response = http_get(url)
-    log.info("WeatherCloud response: %s", response.strip())
-
+    result = response.strip()
+    log.info("WeatherCloud response: %s", result)
+ 
+    if result != "200":
+        raise RuntimeError(f"WeatherCloud rejected the update: {result}")
+ 
     state["last_weathercloud_ts"] = int(time.time() * 1000)
     return True
 
