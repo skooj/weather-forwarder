@@ -1,0 +1,33 @@
+services:
+  weather-listener:
+    build: .
+    container_name: weather-listener
+    restart: unless-stopped
+    ports:
+      - "8090:8090"
+    environment:
+      - LISTEN_PORT=8090
+      - STATION_LATITUDE=${WX_LATITUDE}
+      - STATION_LONGITUDE=${WX_LONGITUDE}
+      - WUNDERGROUND_STATION_ID=${WX_WU_STATION_ID}
+      - WUNDERGROUND_STATION_KEY=${WX_WU_STATION_KEY}
+      - CWOP_STATION_ID=${WX_CWOP_STATION_ID}
+      - CWOP_VALIDATION_CODE=${WX_CWOP_VALIDATION_CODE}
+      - PWSWEATHER_STATION_ID=${WX_PWSWEATHER_STATION_ID}
+      - PWSWEATHER_API_KEY=${WX_PWSWEATHER_API_KEY}
+      - OPENWEATHERMAP_API_KEY=${WX_OWM_API_KEY}
+      - OPENWEATHERMAP_STATION_ID=${WX_OWM_STATION_ID}
+      - WINDY_STATION_ID=${WX_WINDY_STATION_ID}
+      - WINDY_STATION_PASSWORD=${WX_WINDY_STATION_PASSWORD}
+      - WEATHERCLOUD_ID=${WX_WEATHERCLOUD_ID}
+      - WEATHERCLOUD_KEY=${WX_WEATHERCLOUD_KEY}
+      - HEALTHCHECKS_URL=${WX_HEALTHCHECKS_URL}
+      - STATE_FILE=${STATE_FILE}
+    volumes:
+      - ${BASE_DIR}/weather-listener/:/app/data
+    networks:
+      monitoring_monitoring: null
+
+networks:
+  monitoring_monitoring:
+    external: true
